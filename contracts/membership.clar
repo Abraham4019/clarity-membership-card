@@ -8,6 +8,7 @@
 (define-constant err-not-found (err u102))
 (define-constant err-expired (err u103))
 (define-constant err-unauthorized (err u104))
+(define-constant err-insufficient-points (err u105))
 
 ;; Data vars
 (define-map memberships
@@ -16,7 +17,16 @@
         owner: principal,
         membership-type: (string-ascii 20),
         expiry: uint,
-        active: bool
+        active: bool,
+        points: uint
+    }
+)
+
+(define-map rewards 
+    (string-ascii 20)
+    {
+        name: (string-ascii 50),
+        points-cost: uint
     }
 )
 
@@ -36,7 +46,8 @@
                     owner: recipient,
                     membership-type: membership-type,
                     expiry: expiry-date,
-                    active: true
+                    active: true,
+                    points: u0
                 })
                 (var-set next-id (+ card-id u1))
                 (ok card-id)
@@ -46,10 +57,78 @@
     )
 )
 
+;; Add reward points
+(define-public (add-points (card-id uint) (points uint))
+    (let (
+        (membership (unwrap! (map-get? memberships card-id) err-not-found))
+    )
+        (if (is-eq tx-sender contract-owner)
+            (begin 
+                (map-set memberships card-id
+                    (merge membership {
+                        points: (+ (get points membership) points)
+                    })
+                )
+                (ok true)
+            )
+            err-owner-only
+        )
+    )
+)
+
+;; Add new reward
+(define-public (add-reward (reward-id (string-ascii 20)) (name (string-ascii 50)) (points-cost uint))
+    (if (is-eq tx-sender contract-owner)
+        (begin
+            (map-set rewards reward-id {
+                name: name,
+                points-cost: points-cost
+            })
+            (ok true)
+        )
+        err-owner-only
+    )
+)
+
+;; Redeem reward
+(define-public (redeem-reward (card-id uint) (reward-id (string-ascii 20)))
+    (let (
+        (membership (unwrap! (map-get? memberships card-id) err-not-found))
+        (reward (unwrap! (map-get? rewards reward-id) err-not-found))
+    )
+        (if (and
+                (is-eq tx-sender (get owner membership))
+                (get active membership)
+                (<= block-height (get expiry membership))
+            )
+            (if (>= (get points membership) (get points-cost reward))
+                (begin
+                    (map-set memberships card-id
+                        (merge membership {
+                            points: (- (get points membership) (get points-cost reward))
+                        })
+                    )
+                    (ok true)
+                )
+                err-insufficient-points
+            )
+            err-unauthorized
+        )
+    )
+)
+
 ;; Check membership status
 (define-read-only (get-membership (card-id uint))
     (match (map-get? memberships card-id)
         membership (ok membership)
+        err-not-found
+    )
+)
+
+;; Get reward details
+(define-read-only (get-reward (reward-id (string-ascii 20)))
+    (match (map-get? rewards reward-id)
+        reward (ok reward)
         err-not-found
     )
 )
